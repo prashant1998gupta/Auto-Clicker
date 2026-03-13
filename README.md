@@ -1,6 +1,6 @@
-# Auto Clicker
+# Other App
 
-Simple Windows auto clicker built with Python and Tkinter.
+Simple Windows desktop app built with Python and Tkinter.
 
 ## Run
 

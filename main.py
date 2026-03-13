@@ -14,10 +14,10 @@ MOUSEEVENTF_RIGHTDOWN = 0x0008
 MOUSEEVENTF_RIGHTUP = 0x0010
 
 
-class AutoClickerApp:
+class OtherApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("Auto Clicker")
+        self.root.title("Other App")
         self.root.geometry("380x340")
         self.root.minsize(380, 340)
         self.root.resizable(False, False)
@@ -28,7 +28,7 @@ class AutoClickerApp:
         self.cps_var = tk.StringVar(value="10")
         self.button_var = tk.StringVar(value="left")
         self.status_var = tk.StringVar(value="Stopped")
-        self.hotkey_var = tk.StringVar(value="Press F6 to toggle")
+        self.hotkey_var = tk.StringVar(value="Press F6 to switch")
 
         self._build_ui()
 
@@ -44,10 +44,10 @@ class AutoClickerApp:
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(0, weight=1)
 
-        ttk.Label(frame, text="Clicks per second").pack(anchor="w")
+        ttk.Label(frame, text="Action rate").pack(anchor="w")
         ttk.Entry(frame, textvariable=self.cps_var).pack(fill="x", pady=(6, 14))
 
-        ttk.Label(frame, text="Mouse button").pack(anchor="w")
+        ttk.Label(frame, text="Mode").pack(anchor="w")
         button_picker = ttk.Combobox(
             frame,
             textvariable=self.button_var,
@@ -68,16 +68,16 @@ class AutoClickerApp:
         controls.columnconfigure(0, weight=1)
         controls.columnconfigure(1, weight=1)
 
-        ttk.Button(controls, text="Start", command=self.start).grid(
+        ttk.Button(controls, text="Activate", command=self.start).grid(
             row=0, column=0, sticky="ew", padx=(0, 6)
         )
-        ttk.Button(controls, text="Stop", command=self.stop).grid(
+        ttk.Button(controls, text="Deactivate", command=self.stop).grid(
             row=0, column=1, sticky="ew", padx=(6, 0)
         )
 
         ttk.Label(
             frame,
-            text="The clicker uses the current mouse cursor position.\nUse F6 from anywhere to start or stop.",
+            text="Uses the current cursor position.\nUse F6 from anywhere to switch modes.",
             justify="left",
         ).pack(anchor="w", pady=(16, 0))
 
@@ -119,7 +119,7 @@ class AutoClickerApp:
 
     def start(self) -> None:
         self.running = True
-        self.status_var.set(f"Running ({self.button_var.get()} click, {self.cps_var.get()} CPS)")
+        self.status_var.set(f"Active ({self.button_var.get()} mode, {self.cps_var.get()} rate)")
 
     def stop(self) -> None:
         self.running = False
@@ -140,7 +140,7 @@ class AutoClickerApp:
 def main() -> None:
     root = tk.Tk()
     ttk.Style().theme_use("vista")
-    AutoClickerApp(root)
+    OtherApp(root)
     root.mainloop()
 
 
