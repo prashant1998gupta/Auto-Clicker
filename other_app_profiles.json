@@ -1,0 +1,16 @@
+{
+  "last_profile": "Default",
+  "profiles": {
+    "Default": {
+      "interval": "1",
+      "input_mode": "left",
+      "shortcut": "F6",
+      "delay": "0",
+      "position_mode": "Current cursor",
+      "saved_x": "0",
+      "saved_y": "0",
+      "limit_mode": "Unlimited",
+      "limit_value": "10"
+    }
+  }
+}
