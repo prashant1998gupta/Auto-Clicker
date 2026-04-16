@@ -16,6 +16,15 @@
 
 Auto-Clicker provides a seamless and easy way to automate mouse clicks on Windows. With features ranging from global hotkeys to session limits, it is perfect for any task requiring repetitive clicking. **No third-party packages required!**
 
+## 💡 What is the use of this? (Use Cases)
+
+This tool is designed to automate repetitive mouse clicks, saving you time and physical strain. Some common use cases include:
+- **Gaming**: Automate repetitive clicking in idle, clicker, or incremental games.
+- **Data Entry**: Speed up repetitive form submissions or UI navigation tasks.
+- **Software Testing**: Rapidly trigger UI elements to stress-test your applications.
+- **Keeping Sessions Active**: Prevent system idle timeouts or screen locking by simulating user activity.
+- **Shopping & Ticketing**: Ensure you can click the "Buy" button instantly during high-demand sales or ticket drops.
+
 ## ✨ Features
 
 - **Toggle On/Off**: Easily activate and deactivate right from the window or via keyboard shortcuts.
