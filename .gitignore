@@ -4,3 +4,4 @@ __pycache__/
 build/
 *.spec
 dist/other_app_profiles.json
+auto_clicker_settings.json

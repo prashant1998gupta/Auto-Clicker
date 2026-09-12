@@ -127,81 +127,103 @@ class AppTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.profile_path = Path(self.temp.name) / "profiles.json"
-        self.path_patch = patch.object(main, "PROFILE_PATH", self.profile_path)
-        self.path_patch.start()
-        self.addCleanup(self.path_patch.stop)
+        self.settings_path = Path(self.temp.name) / "settings.json"
+        self.legacy_path = Path(self.temp.name) / "profiles.json"
+        for name, value in (("SETTINGS_PATH", self.settings_path), ("LEGACY_PROFILE_PATH", self.legacy_path)):
+            path_patch = patch.object(main, name, value)
+            path_patch.start()
+            self.addCleanup(path_patch.stop)
         self.native_patch = patch.object(main, "NativeInput")
         self.native = self.native_patch.start().return_value
         self.native.is_pressed.return_value = False
+        self.native.keys_held.return_value = False
         self.addCleanup(self.native_patch.stop)
         self.root = tk.Tk()
         self.root.withdraw()
         self.app = main.AutoClickerApp(self.root)
         self.addCleanup(self.app._on_close)
 
-    def test_preset_preview_and_profile_round_trip(self):
-        self.app.use_unity_preset()
-        self.assertTrue(self.app.unity_only_var.get())
-        self.assertEqual(self.app.limit_value_var.get(), "1")
-        self.assertEqual(self.app.delay_var.get(), "3")
-        self.app.preview_var.set(True)
-        self.app.delay_var.set("0")
-        self.app.start()
-        self.app.session.tick(time.monotonic())
-        self.assertEqual(self.app.session.count, 1)
-        self.native.perform.assert_not_called()
-        self.app.profile_var.set("Unity test")
-        self.app.save_profile()
-        self.app.key_var.set("SPACE")
-        self.app.load_profile()
-        self.assertEqual(self.app.key_var.get(), "CTRL+P")
-        stored = json.loads(self.profile_path.read_text())
-        self.assertTrue(stored["profiles"]["Unity test"]["preview"])
-
-    def test_toggle_cancels_pending_start_and_escape_cancels_capture(self):
-        self.app.delay_var.set("3")
-        self.app.start()
-        self.app.toggle()
-        self.assertFalse(self.app.session.active)
-        self.app.capture_point()
-        self.native.is_pressed.side_effect = lambda key: key == 0x1B
+    def poll_once(self):
         self.root.after_cancel(self.app.poll_id)
         self.app._poll()
-        self.assertIsNone(self.app.capture_deadline)
 
-    def test_invalid_key_does_not_start(self):
-        self.app.input_var.set("keyboard")
-        self.app.key_var.set("F6")
-        self.app.start()
+    def test_repeats_selected_mouse_button_until_stopped(self):
+        self.app.interval_var.set("0.5")
+        self.app.button_var.set("right")
+        self.app.start(delay=0)
+        began = self.app.session.activate_at
+        for offset in (0, 0.25, 0.5):
+            self.app.session.tick(began + offset)
+        self.assertEqual(self.native.perform.call_count, 2)
+        self.native.perform.assert_called_with("right", (), None)
+        self.app.stop()
+        self.app.session.tick(began + 5)
+        self.assertEqual(self.native.perform.call_count, 2)
+
+    def test_f6_starts_immediately_and_does_not_repeat_while_held(self):
+        self.native.is_pressed.side_effect = lambda key: key == main.VK_F6
+        self.poll_once()
+        self.assertTrue(self.app.session.active)
+        self.assertEqual(self.app.session.config.delay, 0)
+        self.poll_once()
+        self.assertTrue(self.app.session.active)
+        self.native.is_pressed.side_effect = lambda key: False
+        self.poll_once()
+        self.native.is_pressed.side_effect = lambda key: key == main.VK_F6
+        self.poll_once()
         self.assertFalse(self.app.session.active)
-        self.assertIn("Start/Stop", self.app.status_var.get())
 
-    def test_legacy_profile_loads_with_defaults(self):
-        self.app._apply_profile({"input_mode": "right", "interval": "2"})
-        self.assertEqual(self.app.input_var.get(), "right")
-        self.assertEqual(self.app.key_var.get(), "SPACE")
-        self.assertFalse(self.app.unity_only_var.get())
-
-    def test_changing_preview_stops_a_running_session(self):
+    def test_escape_cancels_start_button_countdown(self):
         self.app.start()
-        self.app.preview_var.set(True)
+        self.assertEqual(self.app.session.config.delay, 3)
+        self.native.is_pressed.side_effect = lambda key: key == main.VK_ESCAPE
+        self.poll_once()
+        self.app.session.tick(time.monotonic() + 10)
         self.assertFalse(self.app.session.active)
-        self.assertIn("Settings changed", self.app.status_var.get())
+        self.native.perform.assert_not_called()
 
-    def test_layout_keeps_start_and_stop_in_footer(self):
-        self.root.update_idletasks()
-        buttons = []
-        def visit(widget):
-            if isinstance(widget, main.ttk.Button) and widget.cget("text") in ("Start", "Stop / Esc"):
-                buttons.append(widget)
-            for child in widget.winfo_children():
-                visit(child)
-        visit(self.root)
-        self.assertEqual(len(buttons), 2)
-        for button in buttons:
-            self.assertEqual(button.master.master.master, self.root)
-        self.assertEqual(len(self.app.notebook.tabs()), 2)
+    def test_invalid_intervals_do_not_start(self):
+        for value in ("", "hello", "0", "-1", "nan", "inf", "0.01", "3601"):
+            with self.subTest(value=value):
+                self.app.interval_var.set(value)
+                self.app.start()
+                self.assertFalse(self.app.session.active)
+                self.assertIn("interval", self.app.status_var.get())
+
+    def test_settings_are_saved_and_loaded_without_a_profile_screen(self):
+        self.app.interval_var.set("0.25")
+        self.app.button_var.set("right")
+        self.app._save_preferences()
+        self.assertEqual(self.app._load_preferences(), ("0.25", "right"))
+        self.assertEqual(json.loads(self.settings_path.read_text()), {"interval": "0.25", "button": "right"})
+
+    def test_old_unity_profile_cannot_restrict_mouse_clicking(self):
+        legacy = {"last_profile": "Unity", "profiles": {"Unity": {
+            "interval": "2", "input_mode": "keyboard", "keyboard_key": "CTRL+P",
+            "unity_only": True, "preview": True, "limit_mode": "By count",
+            "limit_value": "1", "position_mode": "Saved point", "saved_x": "50",
+        }}}
+        self.legacy_path.write_text(json.dumps(legacy), encoding="utf-8")
+        interval, button = self.app._load_preferences()
+        self.assertEqual((interval, button), ("2", "left"))
+        self.app.interval_var.set(interval)
+        self.app.button_var.set(button)
+        self.app.start(delay=0)
+        config = self.app.session.config
+        self.assertFalse(config.unity_only)
+        self.assertFalse(config.preview)
+        self.assertIsNone(config.max_actions)
+        self.assertIsNone(config.saved_point)
+        self.assertEqual(config.input_mode, "left")
+        self.assertEqual(json.loads(self.legacy_path.read_text()), legacy)
+
+    def test_settings_lock_while_clicking_and_unlock_on_stop(self):
+        self.app.start()
+        self.assertEqual(str(self.app.interval_entry.cget("state")), "disabled")
+        self.assertEqual(str(self.app.start_button.cget("state")), "disabled")
+        self.app.stop()
+        self.assertEqual(str(self.app.interval_entry.cget("state")), "normal")
+        self.assertEqual(str(self.app.button_combo.cget("state")), "readonly")
 
 
 if __name__ == "__main__":
