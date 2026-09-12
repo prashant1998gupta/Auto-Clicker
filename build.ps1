@@ -1,0 +1,15 @@
+$ErrorActionPreference = "Stop"
+Push-Location $PSScriptRoot
+try {
+    if (-not (Test-Path '.venv-build\Scripts\python.exe')) {
+        python -m venv .venv-build
+        if ($LASTEXITCODE -ne 0) { throw 'Could not create build environment' }
+    }
+    & .\.venv-build\Scripts\python.exe -m pip install -r requirements-build.txt
+    if ($LASTEXITCODE -ne 0) { throw 'Could not install build dependencies' }
+    & .\.venv-build\Scripts\python.exe -m PyInstaller --noconfirm --clean --onefile --windowed --name AutoClicker main.py
+    if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+    Write-Host "Built $PSScriptRoot\dist\AutoClicker.exe"
+} finally {
+    Pop-Location
+}

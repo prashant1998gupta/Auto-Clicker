@@ -1,5 +1,6 @@
 import ctypes
 import json
+import sys
 import threading
 import time
 import tkinter as tk
@@ -21,7 +22,9 @@ SHORTCUT_MAP = {
     "F9": 0x78,
 }
 
-PROFILE_PATH = Path(__file__).with_name("other_app_profiles.json")
+PROFILE_PATH = (
+    Path(sys.executable) if getattr(sys, "frozen", False) else Path(__file__)
+).with_name("other_app_profiles.json")
 
 
 class POINT(ctypes.Structure):

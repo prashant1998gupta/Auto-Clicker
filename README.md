@@ -39,6 +39,18 @@ This tool is designed to automate repetitive mouse clicks, saving you time and p
 
 ## 🛠️ Run & Installation
 
+### Download the Windows build
+
+Download [AutoClicker.exe](../../raw/main/dist/AutoClicker.exe) and double-click it. Python is not required. The executable is backed up in this repository under `dist/AutoClicker.exe`.
+
+Keep it in a writable folder: saved profiles are stored beside the executable in `other_app_profiles.json`.
+
+### Rebuild on Windows
+
+With Python installed, run `powershell -ExecutionPolicy Bypass -File .\build.ps1` from this folder. This installs the pinned build dependencies in `.venv-build` and creates `dist/AutoClicker.exe`.
+
+After rebuilding, commit and push `dist/AutoClicker.exe` along with any source changes to back up the new version.
+
 Ensure you have Python installed on your Windows machine. No external dependencies are needed (it uses standard libraries like `ctypes` and `tkinter`).
 
 ```powershell

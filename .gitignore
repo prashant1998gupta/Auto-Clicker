@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+.venv-build/
+build/
+*.spec
+dist/other_app_profiles.json
