@@ -9,9 +9,9 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Could not install build dependencies' }
     & .\.venv-build\Scripts\python.exe -m unittest -v test_automation
     if ($LASTEXITCODE -ne 0) { throw 'Tests failed; build cancelled' }
-    & .\.venv-build\Scripts\python.exe -m PyInstaller --noconfirm --clean --onefile --windowed --name AutoClicker main.py
+    & .\.venv-build\Scripts\python.exe -m PyInstaller --noconfirm --clean --onefile --windowed --name UnityClickHelper main.py
     if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
-    Write-Host "Built $PSScriptRoot\dist\AutoClicker.exe"
+    Write-Host "Built $PSScriptRoot\dist\UnityClickHelper.exe"
 } finally {
     Pop-Location
 }

@@ -21,7 +21,7 @@ VK_ESCAPE = 0x1B
 class AutoClickerApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("Auto Clicker")
+        self.root.title("Unity Click Helper")
         self.native = NativeInput()
         self.session = Session(self.native)
         self.closed = False
@@ -44,7 +44,7 @@ class AutoClickerApp:
     def _build_ui(self) -> None:
         frame = ttk.Frame(self.root, padding=20)
         frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="Auto Clicker", font=("Segoe UI", 18, "bold")).pack(anchor="w")
+        ttk.Label(frame, text="Unity Click Helper", font=("Segoe UI", 18, "bold")).pack(anchor="w")
         ttk.Label(
             frame, text="Set the interval, place your cursor, and press F6.", wraplength=340
         ).pack(anchor="w", pady=(6, 20))
