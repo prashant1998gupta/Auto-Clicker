@@ -1,12 +1,12 @@
-# Unity Click Helper
+# Unity Helper
 
 A simple Windows auto clicker with one small window.
 
-The window and executable use the Unity Click Helper name. This name does not guarantee how monitoring software identifies or records the app.
+The window and executable use the Unity Helper name. This name does not guarantee how monitoring software identifies or records the app.
 
 ## Download
 
-[Download UnityClickHelper.exe](https://github.com/prashant1998gupta/Auto-Clicker/raw/refs/heads/main/dist/UnityClickHelper.exe). Double-click it to run; Python is not required.
+[Download UnityHelper.exe](https://github.com/prashant1998gupta/Auto-Clicker/raw/refs/heads/main/dist/UnityHelper.exe). Double-click it to run; Python is not required.
 
 ## Use
 
@@ -39,7 +39,7 @@ python main.py
 powershell -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-The script installs the pinned build dependency in `.venv-build`, runs the tests, and creates `dist/UnityClickHelper.exe`. Commit and push the EXE together with source changes to keep a GitHub backup.
+The script installs the pinned build dependency in `.venv-build`, runs the tests, and creates `dist/UnityHelper.exe`. Commit and push the EXE together with source changes to keep a GitHub backup.
 
 Run tests separately with `python -m unittest -v test_automation`. Windows input is mocked, so the tests do not click or type into other applications.
 
