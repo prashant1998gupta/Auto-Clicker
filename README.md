@@ -34,8 +34,29 @@ This tool is designed to automate repetitive mouse clicks, saving you time and p
 - **Start Delay**: Optional delayed start time before clicking begins.
 - **Session Limits**: Stop automatically by limit count or total duration.
 - **Targeting Modes**: Click at your current cursor or define a specific `X`/`Y` screen location.
-- **Click Types**: Choose between Left or Right input modes.
+- **Input Modes**: Left/right mouse clicks or keyboard combinations, including `CTRL+SHIFT+P`.
+- **Unity Presets**: Play/Stop, Pause/Resume, Step frame, Frame selected, Move, Rotate, and Scale.
+- **Unity Focus Check**: Stop when the foreground process is no longer `Unity.exe`; mouse targets must also belong to that Unity process.
+- **Preview Mode**: Log the intended actions without sending mouse or keyboard input.
+- **Emergency Stop**: `Esc` cancels both running sessions and countdowns.
+- **Organized UI**: Separate action and profile tabs, with Start/Stop always outside the scrolling area.
 - **Live Status Tracking**: View live activity actions and total elapsed time.
+
+## Using Unity Tools
+
+1. Open **Actions & Unity**, choose a Unity preset, and click **Use preset**.
+2. Check the **Key or combination** field against your Unity bindings. Presets use common Windows defaults; custom bindings and contextual commands depend on your Unity setup. See Unity's [Windows shortcut reference](https://docs.unity3d.com/2017.4/Documentation/uploads/Main/Unity_HotKeys_Win.pdf) and [Shortcuts Manager](https://docs.unity3d.com/6000.0/Documentation/Manual/ShortcutsManager.html).
+3. Enable **Preview only** for a dry run. View the result in **Profiles & limits > Recent actions**.
+4. For real input, turn Preview off, click **Start**, then focus Unity during the three-second countdown. Focus the Scene view for tool commands. Presets run once; set a count or duration in **Profiles & limits** for a repeat test.
+5. Press `Esc` to stop at any time. To reuse your configuration, name and save a profile.
+
+The Unity check reads the foreground process; it does not bring Unity forward or inspect whether a particular panel, text field, or modal dialog has focus. Focus changes stop the session instead of automatically resuming it. Preview mode works without Unity running. Changing action settings stops the session; press Start to apply the new settings.
+
+Keyboard combinations support Ctrl, Shift, Alt, A-Z, 0-9, F1-F12, Space, Enter, Tab, arrows, and navigation keys. Esc and the selected Start/Stop hotkey are reserved. Keys represent key presses, not case-sensitive text. The app waits for held modifiers/action keys to be released before sending input.
+
+**Capture point in 3s** gives you time to move the cursor to a mouse target; Esc cancels capture. Saved mouse coordinates are ignored in keyboard mode.
+
+The recent-action log stays in memory for this launch (last 100 actions). Profiles remain on disk beside the EXE. Existing profiles load with their original mouse settings.
 
 ## 🛠️ Run & Installation
 
@@ -47,7 +68,9 @@ Keep it in a writable folder: saved profiles are stored beside the executable in
 
 ### Rebuild on Windows
 
-With Python installed, run `powershell -ExecutionPolicy Bypass -File .\build.ps1` from this folder. This installs the pinned build dependencies in `.venv-build` and creates `dist/AutoClicker.exe`.
+With Python installed, run `powershell -ExecutionPolicy Bypass -File .\build.ps1` from this folder. This installs the pinned build dependency in `.venv-build`, runs the automation tests, and creates `dist/AutoClicker.exe`.
+
+Run tests separately with `python -m unittest -v test_automation`. Tests mock Windows input so they do not send clicks or keys to other applications.
 
 After rebuilding, commit and push `dist/AutoClicker.exe` along with any source changes to back up the new version.
 

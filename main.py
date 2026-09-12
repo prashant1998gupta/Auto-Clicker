@@ -1,19 +1,15 @@
 import ctypes
 import json
+import math
 import sys
-import threading
 import time
 import tkinter as tk
 from tkinter import ttk
 from pathlib import Path
 
+from input_actions import NativeInput, UNITY_PRESETS, parse_shortcut, user32
+from session import RunConfig, Session
 
-user32 = ctypes.WinDLL("user32", use_last_error=True)
-
-MOUSEEVENTF_LEFTDOWN = 0x0002
-MOUSEEVENTF_LEFTUP = 0x0004
-MOUSEEVENTF_RIGHTDOWN = 0x0008
-MOUSEEVENTF_RIGHTUP = 0x0010
 
 SHORTCUT_MAP = {
     "F6": 0x75,
@@ -31,20 +27,27 @@ class POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
 
-class OtherApp:
+class AutoClickerApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("Other App")
-        self.root.geometry("440x760")
-        self.root.minsize(440, 700)
+        self.root.title("AutoClicker - Unity Tools")
+        self.root.geometry("650x850")
+        self.root.minsize(540, 640)
         self.root.resizable(True, True)
 
-        self.shutdown = threading.Event()
-        self.active_event = threading.Event()
-        self.state_lock = threading.Lock()
+        self.native = NativeInput()
+        self.session = Session(self.native)
+        self.closed = False
+        self.was_shortcut_pressed = False
+        self.was_escape_pressed = False
+        self.capture_deadline = None
 
         self.interval_var = tk.StringVar(value="1")
         self.input_var = tk.StringVar(value="left")
+        self.key_var = tk.StringVar(value="SPACE")
+        self.unity_only_var = tk.BooleanVar(value=False)
+        self.preview_var = tk.BooleanVar(value=False)
+        self.preset_var = tk.StringVar(value="Play / Stop")
         self.shortcut_var = tk.StringVar(value="F6")
         self.delay_var = tk.StringVar(value="0")
         self.position_mode_var = tk.StringVar(value="Current cursor")
@@ -61,18 +64,7 @@ class OtherApp:
         self.limit_hint_var = tk.StringVar(value="No session limit")
 
         self.shortcut_vk = SHORTCUT_MAP[self.shortcut_var.get()]
-        self.pending_start_token = 0
-        self.session_count = 0
-        self.session_started_at = None
         self.profile_store = self._load_profile_store()
-        self.run_config = {
-            "interval": 1.0,
-            "input_mode": "left",
-            "position_mode": "Current cursor",
-            "saved_point": None,
-            "max_actions": None,
-            "max_duration": None,
-        }
 
         self.shortcut_var.trace_add("write", self._on_shortcut_change)
         self.limit_mode_var.trace_add("write", self._on_limit_change)
@@ -84,17 +76,50 @@ class OtherApp:
         self._refresh_shortcut_hint()
         self._refresh_position_summary()
         self._refresh_limit_hint()
-        self._schedule_stats_refresh()
-
-        self.action_thread = threading.Thread(target=self._action_loop, daemon=True)
-        self.shortcut_thread = threading.Thread(target=self._shortcut_loop, daemon=True)
-        self.action_thread.start()
-        self.shortcut_thread.start()
+        self.input_var.trace_add("write", self._sync_input_fields)
+        for variable in (
+            self.interval_var, self.input_var, self.key_var, self.delay_var,
+            self.position_mode_var, self.saved_x_var, self.saved_y_var,
+            self.unity_only_var, self.preview_var,
+        ):
+            variable.trace_add("write", self._on_settings_change)
+        self._sync_input_fields()
+        self._poll()
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build_ui(self) -> None:
-        container = ttk.Frame(self.root)
+        style = ttk.Style(self.root)
+        style.configure("Title.TLabel", font=("Segoe UI", 20, "bold"))
+        style.configure("Hint.TLabel", foreground="#526272")
+        style.configure("TButton", padding=(10, 6))
+        header = ttk.Frame(self.root, padding=(20, 16, 20, 10))
+        header.pack(fill="x")
+        ttk.Label(header, text="AutoClicker", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(header, text="Unity tools  /  Mouse and keyboard automation", style="Hint.TLabel").pack(anchor="w", pady=(4, 0))
+
+        footer = ttk.Frame(self.root, padding=(20, 10, 20, 16))
+        footer.pack(side="bottom", fill="x")
+        ttk.Label(footer, textvariable=self.status_var, wraplength=490, font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        stats = ttk.Frame(footer)
+        stats.pack(fill="x", pady=(6, 10))
+        ttk.Label(stats, textvariable=self.activity_var).pack(side="left")
+        ttk.Label(stats, textvariable=self.elapsed_var).pack(side="right")
+        controls = ttk.Frame(footer)
+        controls.pack(fill="x")
+        controls.columnconfigure((0, 1), weight=1)
+        ttk.Button(controls, text="Start", command=self.start).grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        ttk.Button(controls, text="Stop / Esc", command=self.stop).grid(row=0, column=1, sticky="ew", padx=(6, 0))
+        ttk.Label(footer, textvariable=self.shortcut_hint_var, style="Hint.TLabel").pack(anchor="w", pady=(8, 0))
+
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill="both", expand=True, padx=18)
+        action_page = ttk.Frame(self.notebook)
+        profile_page = ttk.Frame(self.notebook, padding=16)
+        self.notebook.add(action_page, text="Actions & Unity")
+        self.notebook.add(profile_page, text="Profiles & limits")
+
+        container = ttk.Frame(action_page)
         container.pack(fill="both", expand=True)
         container.columnconfigure(0, weight=1)
         container.rowconfigure(0, weight=1)
@@ -126,6 +151,8 @@ class OtherApp:
         canvas.bind("<Configure>", _sync_frame_width)
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
+        action_frame = frame
+        frame = profile_page
         profile_box = ttk.LabelFrame(frame, text="Profiles", padding=12)
         profile_box.pack(fill="x", pady=(0, 10))
         profile_box.columnconfigure(0, weight=1)
@@ -146,6 +173,15 @@ class OtherApp:
         )
         ttk.Button(profile_row, text="Delete", command=self.delete_profile).grid(row=0, column=3)
 
+        frame = action_frame
+        unity_box = ttk.LabelFrame(frame, text="Unity shortcut presets", padding=12)
+        unity_box.pack(fill="x", pady=(0, 12))
+        preset_row = ttk.Frame(unity_box)
+        preset_row.pack(fill="x")
+        ttk.Combobox(preset_row, textvariable=self.preset_var, values=tuple(UNITY_PRESETS), state="readonly").pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ttk.Button(preset_row, text="Use preset", command=self.use_unity_preset).pack(side="right")
+        ttk.Label(unity_box, text="Loads one action with a 3-second delay. Check your bindings in Unity: Edit > Shortcuts.", wraplength=450, style="Hint.TLabel").pack(anchor="w", pady=(8, 0))
+
         ttk.Label(frame, text="Action interval (s)").pack(anchor="w")
         ttk.Entry(frame, textvariable=self.interval_var).pack(fill="x", pady=(6, 10))
 
@@ -153,9 +189,17 @@ class OtherApp:
         ttk.Combobox(
             frame,
             textvariable=self.input_var,
-            values=("left", "right"),
+            values=("left", "right", "keyboard"),
             state="readonly",
         ).pack(fill="x", pady=(6, 10))
+
+        ttk.Label(frame, text="Key or combination").pack(anchor="w")
+        self.key_combo = ttk.Combobox(frame, textvariable=self.key_var, values=("SPACE", "ENTER", "W", "A", "S", "D", "CTRL+P", "CTRL+SHIFT+P", "CTRL+ALT+P"))
+        self.key_combo.pack(fill="x", pady=(6, 4))
+        ttk.Label(frame, text="Examples: SPACE, W, CTRL+SHIFT+P. Esc always stops.", style="Hint.TLabel").pack(anchor="w", pady=(0, 10))
+        ttk.Checkbutton(frame, text="Stop if Unity Editor is not focused", variable=self.unity_only_var).pack(anchor="w")
+        ttk.Checkbutton(frame, text="Preview only (log actions without sending input)", variable=self.preview_var).pack(anchor="w", pady=(4, 12))
+        ttk.Label(frame, text="Changing settings stops the current session. Start to apply them.", style="Hint.TLabel", wraplength=450).pack(anchor="w", pady=(0, 10))
 
         shortcut_row = ttk.Frame(frame)
         shortcut_row.pack(fill="x", pady=(0, 10))
@@ -177,7 +221,7 @@ class OtherApp:
         ttk.Label(delay_right, text="Start delay (s)").pack(anchor="w")
         ttk.Entry(delay_right, textvariable=self.delay_var).pack(fill="x", pady=(6, 0))
 
-        limit_box = ttk.LabelFrame(frame, text="Session", padding=12)
+        limit_box = ttk.LabelFrame(profile_page, text="Session", padding=12)
         limit_box.pack(fill="x", pady=(0, 10))
 
         limit_row = ttk.Frame(limit_box)
@@ -202,7 +246,7 @@ class OtherApp:
 
         ttk.Label(limit_box, textvariable=self.limit_hint_var).pack(anchor="w", pady=(10, 0))
 
-        target_box = ttk.LabelFrame(frame, text="Target", padding=12)
+        target_box = ttk.LabelFrame(frame, text="Mouse position (mouse modes only)", padding=12)
         target_box.pack(fill="x", pady=(0, 10))
         target_box.columnconfigure(0, weight=1)
 
@@ -233,86 +277,68 @@ class OtherApp:
         target_actions.pack(anchor="w")
 
         ttk.Button(
-            target_actions, text="Capture current point", command=self.capture_point
+            target_actions, text="Capture point in 3s", command=self.capture_point
         ).grid(row=0, column=0, padx=(0, 8))
         ttk.Button(target_actions, text="Reset point", command=self.reset_point).grid(
             row=0, column=1
         )
         ttk.Label(target_box, textvariable=self.location_var).pack(anchor="w", pady=(10, 0))
 
-        status_box = ttk.LabelFrame(frame, text="Status", padding=12)
-        status_box.pack(fill="x", pady=(0, 10))
-        ttk.Label(status_box, textvariable=self.status_var, font=("Segoe UI", 11, "bold")).pack(
-            anchor="w"
-        )
-        ttk.Label(status_box, textvariable=self.shortcut_hint_var).pack(anchor="w", pady=(4, 0))
-        ttk.Label(status_box, textvariable=self.activity_var).pack(anchor="w", pady=(8, 0))
-        ttk.Label(status_box, textvariable=self.elapsed_var).pack(anchor="w", pady=(2, 0))
+        log_box = ttk.LabelFrame(profile_page, text="Recent actions", padding=12)
+        log_box.pack(fill="both", expand=True)
+        self.action_log = tk.Text(log_box, height=9, width=40, state="disabled", wrap="word", font=("Consolas", 10))
+        self.action_log.pack(fill="both", expand=True)
+        ttk.Label(log_box, text="Shows the last 100 actions for this launch.", style="Hint.TLabel").pack(anchor="w", pady=(6, 0))
 
-        controls = ttk.Frame(frame)
-        controls.pack(fill="x")
-        controls.columnconfigure(0, weight=1)
-        controls.columnconfigure(1, weight=1)
-
-        ttk.Button(controls, text="Activate", command=self.start).grid(
-            row=0, column=0, sticky="ew", padx=(0, 6)
-        )
-        ttk.Button(controls, text="Deactivate", command=self.stop).grid(
-            row=0, column=1, sticky="ew", padx=(6, 0)
-        )
-
-    def _action_loop(self) -> None:
-        while not self.shutdown.is_set():
-            if not self.active_event.is_set():
-                time.sleep(0.05)
-                continue
-
-            with self.state_lock:
-                config = dict(self.run_config)
-
-            if config["position_mode"] == "Saved point" and config["saved_point"] is not None:
-                user32.SetCursorPos(*config["saved_point"])
-
-            self._perform_action(config["input_mode"])
-
-            with self.state_lock:
-                self.session_count += 1
-                count = self.session_count
-
-            if config["max_actions"] is not None and count >= config["max_actions"]:
-                self.active_event.clear()
-                self.root.after(0, lambda: self._complete_session("Completed count limit"))
-                continue
-
-            if (
-                config["max_duration"] is not None
-                and self.session_started_at is not None
-                and (time.time() - self.session_started_at) >= config["max_duration"]
-            ):
-                self.active_event.clear()
-                self.root.after(0, lambda: self._complete_session("Completed duration limit"))
-                continue
-
-            time.sleep(config["interval"])
-
-    def _shortcut_loop(self) -> None:
-        was_pressed = False
-        while not self.shutdown.is_set():
-            shortcut_vk = self.shortcut_vk
-            pressed = bool(user32.GetAsyncKeyState(shortcut_vk) & 0x8000)
-            if pressed and not was_pressed:
-                self.root.after(0, self.toggle)
-            was_pressed = pressed
-            time.sleep(0.05)
-
-    def _perform_action(self, input_mode: str) -> None:
-        if input_mode == "right":
-            user32.mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
-            user32.mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
+    def _poll(self) -> None:
+        if self.closed:
             return
+        now = time.monotonic()
+        pressed = self.native.is_pressed(self.shortcut_vk)
+        escape = self.native.is_pressed(0x1B)
+        if escape and not self.was_escape_pressed:
+            self.stop()
+        elif pressed and not self.was_shortcut_pressed and not escape:
+            self.toggle()
+        self.was_shortcut_pressed = pressed
+        self.was_escape_pressed = escape
+        was_active = self.session.active
+        self.session.tick(now)
+        if was_active:
+            self.status_var.set(self.session.status)
+        for event in self.session.events:
+            self.action_log.configure(state="normal")
+            self.action_log.insert("end", f"{time.strftime('%H:%M:%S')}  {event}\n")
+            if int(self.action_log.index("end-1c").split(".")[0]) > 101:
+                self.action_log.delete("1.0", "2.0")
+            self.action_log.see("end")
+            self.action_log.configure(state="disabled")
+        self.session.events.clear()
+        if self.capture_deadline is not None and now >= self.capture_deadline:
+            self.capture_deadline = None
+            self._capture_point_now()
+        self._refresh_stats()
+        self.poll_id = self.root.after(50, self._poll)
 
-        user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-        user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+    def _sync_input_fields(self, *_args: object) -> None:
+        self.key_combo.configure(state="normal" if self.input_var.get() == "keyboard" else "disabled")
+
+    def _on_settings_change(self, *_args: object) -> None:
+        if self.session.active:
+            self.stop()
+            self.status_var.set("Settings changed. Press Start to run with the new settings.")
+
+    def use_unity_preset(self) -> None:
+        self.stop()
+        self.input_var.set("keyboard")
+        self.key_var.set(UNITY_PRESETS[self.preset_var.get()])
+        self.unity_only_var.set(True)
+        self.delay_var.set("3")
+        self.limit_mode_var.set("By count")
+        self.limit_value_var.set("1")
+        self.position_mode_var.set("Current cursor")
+        self._refresh_position_summary()
+        self.status_var.set(f"Loaded {self.preset_var.get()}. Press Start, then switch to Unity.")
 
     def _get_interval(self) -> float:
         try:
@@ -320,7 +346,7 @@ class OtherApp:
         except ValueError:
             interval = 1.0
 
-        return max(0.1, min(interval, 3600.0))
+        return max(0.1, min(interval, 3600.0)) if math.isfinite(interval) else 1.0
 
     def _get_delay(self) -> float:
         try:
@@ -328,17 +354,17 @@ class OtherApp:
         except ValueError:
             delay = 0.0
 
-        return max(0.0, min(delay, 60.0))
+        return max(0.0, min(delay, 60.0)) if math.isfinite(delay) else 0.0
 
     def _get_saved_point(self) -> tuple[int, int]:
         try:
             x = int(float(self.saved_x_var.get()))
-        except ValueError:
+        except (ValueError, OverflowError):
             x = 0
 
         try:
             y = int(float(self.saved_y_var.get()))
-        except ValueError:
+        except (ValueError, OverflowError):
             y = 0
 
         return (x, y)
@@ -353,47 +379,16 @@ class OtherApp:
         except ValueError:
             raw_value = 10.0
 
+        if not math.isfinite(raw_value):
+            raw_value = 10.0
+
         if mode == "By count":
             return (mode, max(1, int(raw_value)))
 
         return (mode, max(1.0, min(raw_value, 86400.0)))
 
-    def _start_after_delay(self, token: int, delay: float) -> None:
-        time.sleep(delay)
-        if self.shutdown.is_set() or token != self.pending_start_token:
-            return
-        self.root.after(0, lambda: self._finish_start(token))
-
-    def _finish_start(self, token: int) -> None:
-        if token != self.pending_start_token or self.shutdown.is_set():
-            return
-
-        self.active_event.set()
-        self.session_started_at = time.time()
-        self.status_var.set(self._build_active_status())
-
-    def _build_active_status(self) -> str:
-        with self.state_lock:
-            config = dict(self.run_config)
-
-        target = "current cursor"
-        if config["position_mode"] == "Saved point" and config["saved_point"] is not None:
-            x, y = config["saved_point"]
-            target = f"saved point {x}, {y}"
-
-        limit_label = "no limit"
-        if config["max_actions"] is not None:
-            limit_label = f"{config['max_actions']} actions"
-        elif config["max_duration"] is not None:
-            limit_label = f"{config['max_duration']:.1f}s duration"
-
-        return (
-            f"Active ({config['input_mode']} mode, every {config['interval']:.1f}s, "
-            f"{target}, {limit_label})"
-        )
-
     def _refresh_shortcut_hint(self) -> None:
-        self.shortcut_hint_var.set(f"Press {self.shortcut_var.get()} from anywhere to switch")
+        self.shortcut_hint_var.set(f"{self.shortcut_var.get()}: Start/Stop   |   Esc: Stop (including countdown)")
 
     def _refresh_position_summary(self) -> None:
         if self.position_mode_var.get() == "Saved point":
@@ -411,33 +406,31 @@ class OtherApp:
         else:
             self.limit_hint_var.set(f"Stops automatically after {float(value):.1f} seconds")
 
-    def _schedule_stats_refresh(self) -> None:
-        self._refresh_stats()
-        self.root.after(200, self._schedule_stats_refresh)
-
     def _refresh_stats(self) -> None:
-        with self.state_lock:
-            count = self.session_count
-
-        self.activity_var.set(f"{count} actions")
-
-        if self.session_started_at is None:
-            self.elapsed_var.set("0.0s elapsed")
-            return
-
-        elapsed = max(0.0, time.time() - self.session_started_at)
-        self.elapsed_var.set(f"{elapsed:.1f}s elapsed")
+        noun = "previews" if self.session.config.preview else "actions"
+        self.activity_var.set(f"{self.session.count} {noun}")
+        self.elapsed_var.set(f"{self.session.elapsed:.1f}s elapsed")
 
     def _on_shortcut_change(self, *_args: object) -> None:
+        if self.session.active:
+            self.stop()
         self.shortcut_vk = SHORTCUT_MAP.get(self.shortcut_var.get(), SHORTCUT_MAP["F6"])
         self._refresh_shortcut_hint()
 
     def _on_limit_change(self, *_args: object) -> None:
+        self._on_settings_change()
         self._refresh_limit_hint()
 
     def capture_point(self) -> None:
+        self.stop()
+        self.capture_deadline = time.monotonic() + 3
+        self.status_var.set("Move the cursor to the target. Capturing in 3s; Esc cancels.")
+
+    def _capture_point_now(self) -> None:
         point = POINT()
-        user32.GetCursorPos(ctypes.byref(point))
+        if not user32.GetCursorPos(ctypes.byref(point)):
+            self.status_var.set("Could not capture the cursor position")
+            return
         self.saved_x_var.set(str(point.x))
         self.saved_y_var.set(str(point.y))
         self.position_mode_var.set("Saved point")
@@ -445,6 +438,7 @@ class OtherApp:
         self.status_var.set(f"Point captured ({point.x}, {point.y})")
 
     def reset_point(self) -> None:
+        self.capture_deadline = None
         self.saved_x_var.set("0")
         self.saved_y_var.set("0")
         self.position_mode_var.set("Current cursor")
@@ -455,6 +449,9 @@ class OtherApp:
         return {
             "interval": self.interval_var.get(),
             "input_mode": self.input_var.get(),
+            "keyboard_key": self.key_var.get(),
+            "unity_only": self.unity_only_var.get(),
+            "preview": self.preview_var.get(),
             "shortcut": self.shortcut_var.get(),
             "delay": self.delay_var.get(),
             "position_mode": self.position_mode_var.get(),
@@ -465,8 +462,12 @@ class OtherApp:
         }
 
     def _apply_profile(self, data: dict[str, object]) -> None:
+        self.stop()
         self.interval_var.set(str(data.get("interval", "1")))
         self.input_var.set(str(data.get("input_mode", "left")))
+        self.key_var.set(str(data.get("keyboard_key", "SPACE")))
+        self.unity_only_var.set(data.get("unity_only") is True)
+        self.preview_var.set(data.get("preview") is True)
         self.shortcut_var.set(str(data.get("shortcut", "F6")))
         self.delay_var.set(str(data.get("delay", "0")))
         self.position_mode_var.set(str(data.get("position_mode", "Current cursor")))
@@ -506,7 +507,7 @@ class OtherApp:
         if not isinstance(loaded, dict) or not isinstance(loaded.get("profiles"), dict):
             return default_store
 
-        profiles = loaded["profiles"]
+        profiles = {name: data for name, data in loaded["profiles"].items() if isinstance(data, dict)}
         if "Default" not in profiles:
             profiles["Default"] = default_store["profiles"]["Default"]
 
@@ -574,78 +575,61 @@ class OtherApp:
         self._save_profile_store()
         self.status_var.set(f"Profile deleted: {name}")
 
-    def _complete_session(self, message: str) -> None:
-        if not self.active_event.is_set():
-            return
-        self.pending_start_token += 1
-        self.active_event.clear()
-        self.session_started_at = None
-        self.status_var.set(message)
-
     def start(self) -> None:
-        self.pending_start_token += 1
-        self.active_event.clear()
-
+        self.stop()
         interval = self._get_interval()
         limit_mode, limit_value = self._get_limit_config()
         input_mode = self.input_var.get()
+        if input_mode not in ("left", "right", "keyboard"):
+            self.status_var.set("Select left, right or keyboard mode")
+            return
+        try:
+            keys = parse_shortcut(self.key_var.get(), self.shortcut_vk) if input_mode == "keyboard" else ()
+        except ValueError as error:
+            self.status_var.set(str(error))
+            return
         position_mode = self.position_mode_var.get()
-        saved_point = self._get_saved_point() if position_mode == "Saved point" else None
-
-        with self.state_lock:
-            self.run_config = {
-                "interval": interval,
-                "input_mode": input_mode,
-                "position_mode": position_mode,
-                "saved_point": saved_point,
-                "max_actions": int(limit_value) if limit_mode == "By count" else None,
-                "max_duration": float(limit_value) if limit_mode == "By duration" else None,
-            }
-            self.session_count = 0
-
-        self.session_started_at = None
+        saved_point = self._get_saved_point() if input_mode != "keyboard" and position_mode == "Saved point" else None
+        config = RunConfig(
+            interval=interval, input_mode=input_mode, keys=keys,
+            key_label=self.key_var.get().strip().upper(), saved_point=saved_point,
+            max_actions=int(limit_value) if limit_mode == "By count" else None,
+            max_duration=float(limit_value) if limit_mode == "By duration" else None,
+            delay=self._get_delay(), unity_only=self.unity_only_var.get(),
+            preview=self.preview_var.get(),
+        )
+        self.session.start(config, time.monotonic())
+        self.status_var.set(self.session.status)
         self._refresh_position_summary()
         self._refresh_limit_hint()
 
-        delay = self._get_delay()
-        if delay > 0:
-            self.status_var.set(f"Waiting {delay:.1f}s before activation")
-            token = self.pending_start_token
-            threading.Thread(
-                target=self._start_after_delay,
-                args=(token, delay),
-                daemon=True,
-            ).start()
-            return
-
-        self._finish_start(self.pending_start_token)
-
     def stop(self) -> None:
-        self.pending_start_token += 1
-        self.active_event.clear()
-        self.session_started_at = None
-        self.status_var.set("Idle")
+        self.capture_deadline = None
+        self.session.stop("Idle", time.monotonic())
+        self.status_var.set(self.session.status)
 
     def toggle(self) -> None:
-        if self.active_event.is_set():
+        if self.session.active:
             self.stop()
             return
 
         self.start()
 
     def _on_close(self) -> None:
-        self.profile_store["profiles"]["Default"] = self._collect_current_profile()
-        self.profile_store["last_profile"] = self.profile_var.get().strip() or "Default"
+        self.stop()
+        name = self.profile_var.get().strip() or "Default"
+        self.profile_store["profiles"][name] = self._collect_current_profile()
+        self.profile_store["last_profile"] = name
         self._save_profile_store()
-        self.shutdown.set()
-        self.active_event.clear()
+        self.closed = True
+        self.root.after_cancel(self.poll_id)
         self.root.destroy()
 
 
 def main() -> None:
     root = tk.Tk()
     ttk.Style().theme_use("vista")
-    OtherApp(root)
+    AutoClickerApp(root)
     root.mainloop()
 
 
